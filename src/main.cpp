@@ -1,0 +1,128 @@
+#include "main.h" // IWYU pragma: keep
+#include "lemlib/chassis/chassis.hpp"
+#include "pros/abstract_motor.hpp"
+#include "pros/adi.hpp"
+#include "lemlib/api.hpp" // IWYU pragma: keep
+#include "pros/misc.h"
+#include "pros/motors.hpp"
+#include "pros/rtos.hpp"
+
+// ----------- INIT PORTS FOR ROBOT MODULES ----------- //
+// controller
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
+// motor groups
+// pros::MotorGroup leftMotors({-2, 4, -6}, pros::MotorGearset::blue);
+pros::MotorGroup leftMotors({12, -13}, pros::MotorGearset::blue); // motor 12 not working
+pros::MotorGroup rightMotors({-9, 18}, pros::MotorGearset::blue);
+
+// sensors
+pros::Imu imu(10);
+
+// drivetrain settings
+lemlib::Drivetrain drivetrain(&leftMotors, &rightMotors, 12.5, lemlib::Omniwheel::NEW_275, 450, 2);
+// controllers
+lemlib::ControllerSettings linearController(10, // proportional gain (kP)
+                                              0, // integral gain (kI)
+                                              3, // derivative gain (kD)
+                                              0, // anti windup
+                                              0, // small error range, in inches
+                                              0, // small error range timeout, in milliseconds
+                                              0, // large error range, in inches
+                                              0, // large error range timeout, in milliseconds
+                                              0 // maximum acceleration (slew)
+);
+lemlib::ControllerSettings angularController(2, // proportional gain (kP)
+                                              0, // integral gain (kI)
+                                              10, // derivative gain (kD)
+                                              0, // anti windup
+                                              0, // small error range, in inches
+                                              0, // small error range timeout, in milliseconds
+                                              0, // large error range, in inches
+                                              0, // large error range timeout, in milliseconds
+                                              0 // maximum acceleration (slew)
+);
+
+// tracking wheels
+pros::Rotation horizontalEnc(20);
+pros::Rotation verticalEnc(-9);
+lemlib::TrackingWheel horizontal(&horizontalEnc, 1.875, 0.75);
+lemlib::TrackingWheel vertical(&verticalEnc, 1.875, -2.75);
+
+// odom sensors
+lemlib::OdomSensors sensors(&vertical, nullptr, &horizontal, nullptr, &imu);
+
+// drive curves
+lemlib::ExpoDriveCurve throttleCurve(3, 10, 1.019);
+lemlib::ExpoDriveCurve steerCurve(3, 10, 1.019);
+
+// chassis
+lemlib::Chassis chassis(drivetrain, linearController, angularController, sensors, &throttleCurve, &steerCurve);
+
+
+// -------------------- QUICK CONFIGURATION -------------------- //
+constexpr int side = 1; // 1 = right, -1 = left
+
+// -------------------- PROS Callbacks -------------------- //
+/* Init code upon program being run */
+bool logDebug = false;
+void initialize() {
+    pros::lcd::initialize();
+    chassis.calibrate();
+
+    // IMPORTANT: make tasks static so they don't get destroyed when initialize() returns
+    static pros::Task screenTask([] {
+        while (true) {
+            lemlib::Pose chass = chassis.getPose();
+            pros::lcd::print(0, "X: %f", chass.x);
+            pros::lcd::print(1, "Y: %f", chass.y); 
+            pros::lcd::print(2, "Theta: %f", chass.theta); 
+
+            if (logDebug) {
+                std::printf(
+                    "Chassis:\nX: %f\nY: %f\nTheta: %f\n\n",
+                    chass.x,
+                    chass.y,
+                    chass.theta
+                );
+            }
+
+            lemlib::telemetrySink()->info("Chassis pose: {}", chass);
+
+            pros::delay(50);
+        }
+    });
+}
+
+/* Match end robot state */
+void disabled() {
+
+}
+
+/* Init code that only runs in competition mode */
+void competition_initialize() {}
+
+/* Code that runs during autonomous period */
+void autonomous() {
+
+}
+
+// -------------------- Driver Control -------------------- //
+bool driveDirection = true; // default direction, brain side
+int modifier = driveDirection ? 1 : -1;
+
+/* Code that runs during driver control; The manual controls for the robot */
+void opcontrol() {
+    while (true) {
+        int leftY = modifier*controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+        chassis.arcade(leftY, rightX);
+
+        if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+            driveDirection = !driveDirection;
+            modifier = driveDirection ? 1 : -1;
+        }
+
+        pros::delay(25);
+    }
+}
